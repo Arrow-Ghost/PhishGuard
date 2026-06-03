@@ -1,0 +1,20 @@
+{
+  "name": "phishguard-backend",
+  "version": "1.0.0",
+  "description": "PhishGuard Monitoring Backend & Telemetry Stream Hub",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "nodemon server.js"
+  },
+  "dependencies": {
+    "cors": "^2.8.5",
+    "express": "^4.19.2",
+    "ws": "^8.16.0"
+  },
+  "devDependencies": {
+    "nodemon": "^3.1.0"
+  },
+  "author": "PhishGuard Dev Team",
+  "license": "MIT"
+}
