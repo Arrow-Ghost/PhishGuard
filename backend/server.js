@@ -92,6 +92,41 @@ wss.on('connection', (ws) => {
   // Seed clients with existing security history upon handshake
   ws.send(JSON.stringify({ type: 'SEEDED_LOGS', data: activeLogs }));
 
+  // Listen to telemetry data sent from security-agent/interceptor.js over WS
+  ws.on('message', (message) => {
+    try {
+      const payload = JSON.parse(message);
+      
+      if (payload.action === 'Network FETCH Request' && payload.status === 'BLOCKED') {
+        const newLog = {
+          id: `log-${Date.now()}-${Math.random().toString(36).substr(2, 5)}`,
+          timestamp: new Date().toISOString(),
+          sourcePackage: payload.callerContext || 'anonymous',
+          callerUrl: payload.target || 'unknown',
+          action: payload.action,
+          details: `Target: ${payload.target} [Latency: ${payload.latencyMs}ms]`,
+          status: payload.status,
+          severity: payload.severity.toLowerCase(),
+          stack: ''
+        };
+
+        // Prepend to active memory queue
+        activeLogs.unshift(newLog);
+        // Cap history at 150 entries
+        if (activeLogs.length > 150) activeLogs.pop();
+
+        // Print nicely in server process stdout
+        const color = newLog.severity === 'critical' ? '\x1b[31m' : newLog.severity === 'warning' ? '\x1b[33m' : '\x1b[32m';
+        console.log(`[TELEMETRY via WS] [${newLog.status}] ${color}${newLog.severity.toUpperCase()}\x1b[0m: [${newLog.sourcePackage}] - ${newLog.action} -> ${newLog.details}`);
+
+        // Broadcast to all active developer dashboards
+        broadcastLog(newLog);
+      }
+    } catch (err) {
+      console.error('[PhishGuard Hub] Error parsing client telemetry payload over WS:', err);
+    }
+  });
+
   ws.on('close', () => {
     clients.delete(ws);
     console.log(`[PhishGuard Hub] Client disconnected (${clients.size} remaining)`);

