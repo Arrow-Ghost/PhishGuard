@@ -6,6 +6,7 @@
  * telemetry logs from browser interceptors and broadcast them instantly.
  */
 
+const crypto = require('crypto');
 const express = require('express');
 const http = require('http');
 const WebSocket = require('ws');
@@ -78,7 +79,34 @@ const activeLogs = [
   }
 ];
 
-// Create HTTP & WebSocket Server
+// ─── Reusable Log Factory ────────────────────────────────────────────────────
+/**
+ * Maps a raw interceptor payload into a normalized, structured log entry.
+ * Used by BOTH the HTTP and WebSocket ingestion paths for guaranteed symmetry.
+ * @param {object} payload - Raw telemetry payload
+ * @returns {object} Structured newLog object
+ */
+function createLog(payload) {
+  const severity = (payload.severity || 'info').toLowerCase();
+  const action   = payload.action || 'Network Operation';
+  const target   = payload.target || payload.callerUrl || 'unknown';
+  const details  = payload.details
+    || (payload.latencyMs != null ? `Target: ${target} [Latency: ${payload.latencyMs}ms]` : `Target: ${target}`);
+
+  return {
+    id:            crypto.randomUUID(),
+    timestamp:     new Date().toISOString(),
+    sourcePackage: payload.callerContext || payload.sourcePackage || 'anonymous',
+    callerUrl:     target,
+    action,
+    details,
+    status:        payload.status   || 'ALLOWED',
+    severity,
+    stack:         payload.stack    || ''
+  };
+}
+
+// ─── HTTP & WebSocket Server ──────────────────────────────────────────────────
 const server = http.createServer(app);
 const wss = new WebSocket.Server({ server });
 
@@ -88,43 +116,41 @@ const clients = new Set();
 wss.on('connection', (ws) => {
   clients.add(ws);
   console.log(`[PhishGuard Hub] Client connected to live events (${clients.size} total active users)`);
-  
-  // Seed clients with existing security history upon handshake
-  ws.send(JSON.stringify({ type: 'SEEDED_LOGS', data: activeLogs }));
 
-  // Listen to telemetry data sent from security-agent/interceptor.js over WS
-  ws.on('message', (message) => {
+  // Seed client with existing security history upon handshake
+  try {
+    ws.send(JSON.stringify({ type: 'SEEDED_LOGS', data: activeLogs }));
+  } catch (seedErr) {
+    console.error('[PhishGuard Hub] Failed to seed logs to new client:', seedErr.message);
+  }
+
+  // ── WebSocket Telemetry Ingestion (security-agent/interceptor.js) ──────────
+  // Accepts ALL valid telemetry payloads — identical behaviour to POST /api/telemetry
+  ws.on('message', (raw) => {
     try {
-      const payload = JSON.parse(message);
-      
-      if (payload.action === 'Network FETCH Request' && payload.status === 'BLOCKED') {
-        const newLog = {
-          id: `log-${Date.now()}-${Math.random().toString(36).substr(2, 5)}`,
-          timestamp: new Date().toISOString(),
-          sourcePackage: payload.callerContext || 'anonymous',
-          callerUrl: payload.target || 'unknown',
-          action: payload.action,
-          details: `Target: ${payload.target} [Latency: ${payload.latencyMs}ms]`,
-          status: payload.status,
-          severity: payload.severity.toLowerCase(),
-          stack: ''
-        };
+      const payload = JSON.parse(raw);
 
-        // Prepend to active memory queue
-        activeLogs.unshift(newLog);
-        // Cap history at 150 entries
-        if (activeLogs.length > 150) activeLogs.pop();
-
-        // Print nicely in server process stdout
-        const color = newLog.severity === 'critical' ? '\x1b[31m' : newLog.severity === 'warning' ? '\x1b[33m' : '\x1b[32m';
-        console.log(`[TELEMETRY via WS] [${newLog.status}] ${color}${newLog.severity.toUpperCase()}\x1b[0m: [${newLog.sourcePackage}] - ${newLog.action} -> ${newLog.details}`);
-
-        // Broadcast to all active developer dashboards
-        broadcastLog(newLog);
+      if (!payload.action) {
+        console.warn('[PhishGuard Hub] WS payload missing required field: action — ignored.');
+        return;
       }
+
+      const newLog = createLog(payload);
+
+      activeLogs.unshift(newLog);
+      if (activeLogs.length > 150) activeLogs.pop();
+
+      const color = newLog.severity === 'critical' ? '\x1b[31m' : newLog.severity === 'warning' ? '\x1b[33m' : '\x1b[32m';
+      console.log(`[TELEMETRY via WS] [${newLog.status}] ${color}${newLog.severity.toUpperCase()}\x1b[0m: [${newLog.sourcePackage}] - ${newLog.action} -> ${newLog.details}`);
+
+      broadcastLog(newLog);
     } catch (err) {
-      console.error('[PhishGuard Hub] Error parsing client telemetry payload over WS:', err);
+      console.error('[PhishGuard Hub] Error processing WS telemetry payload:', err.message);
     }
+  });
+
+  ws.on('error', (err) => {
+    console.error(`[PhishGuard Hub] WebSocket client error: ${err.message}`);
   });
 
   ws.on('close', () => {
@@ -133,12 +159,17 @@ wss.on('connection', (ws) => {
   });
 });
 
-// Broadcast utilities
+// ─── Broadcast Utility ───────────────────────────────────────────────────────
 function broadcastLog(log) {
   const payload = JSON.stringify({ type: 'NEW_LOG', data: log });
   clients.forEach(client => {
     if (client.readyState === WebSocket.OPEN) {
-      client.send(payload);
+      try {
+        client.send(payload);
+      } catch (sendErr) {
+        console.error('[PhishGuard Hub] Failed to broadcast to client — removing from pool:', sendErr.message);
+        clients.delete(client);
+      }
     }
   });
 }
@@ -153,32 +184,25 @@ app.get('/api/telemetry', (req, res) => {
   res.json(activeLogs);
 });
 
-// Endpoint to ingest client interceptor payloads
+// ── HTTP Telemetry Ingestion (security-agent/interceptor.js) ─────────────────
 app.post('/api/telemetry', (req, res) => {
-  const { sourcePackage, callerUrl, action, details, status, severity, stack } = req.body;
-  
-  const newLog = {
-    id: `log-${Date.now()}-${Math.random().toString(36).substr(2, 5)}`,
-    timestamp: new Date().toISOString(),
-    sourcePackage: sourcePackage || 'anonymous',
-    callerUrl: callerUrl || 'unknown',
-    action: action || 'Network Operation',
-    details: details || '',
-    status: status || 'ALLOWED',
-    severity: severity || 'info',
-    stack: stack || ''
-  };
+  const body = req.body;
 
-  // Prepend to active memory queue
+  // Payload validation — action is the minimum required field
+  if (!body || typeof body !== 'object' || !body.action) {
+    return res.status(400).json({
+      error: 'Invalid telemetry payload. Required field: action.'
+    });
+  }
+
+  const newLog = createLog(body);
+
   activeLogs.unshift(newLog);
-  // Cap history at 150 entries
   if (activeLogs.length > 150) activeLogs.pop();
 
-  // Print nicely in server process stdout
-  const color = severity === 'critical' ? '\x1b[31m' : severity === 'warning' ? '\x1b[33m' : '\x1b[32m';
-  console.log(`[TELEMETRY] [${newLog.status}] ${color}${newLog.severity.toUpperCase()}\x1b[0m: [${newLog.sourcePackage}] - ${newLog.action} -> ${newLog.details}`);
+  const color = newLog.severity === 'critical' ? '\x1b[31m' : newLog.severity === 'warning' ? '\x1b[33m' : '\x1b[32m';
+  console.log(`[TELEMETRY via HTTP] [${newLog.status}] ${color}${newLog.severity.toUpperCase()}\x1b[0m: [${newLog.sourcePackage}] - ${newLog.action} -> ${newLog.details}`);
 
-  // Broadcast to all active developer dashboards
   broadcastLog(newLog);
 
   res.status(201).json({ success: true, logId: newLog.id });
