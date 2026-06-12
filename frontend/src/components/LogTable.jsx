@@ -2,53 +2,50 @@ import React, { useState } from 'react';
 import { 
   Search, 
   Terminal, 
-  ShieldAlert, 
-  ShieldCheck, 
   FileText, 
-  AlertTriangle, 
-  Info,
   ChevronRight,
   FilterX
 } from 'lucide-react';
 
-export default function LogTable({ logs }) {
+export default function LogTable({ logs = [] }) {
   const [search, setSearch] = useState('');
   const [statusFilter, setStatusFilter] = useState('ALL');
   const [selectedLog, setSelectedLog] = useState(null);
 
   // Filter logs based on search string and status selection
   const filteredLogs = logs.filter(log => {
+    const caller = log.callerContext || log.sourcePackage || '';
+    const action = log.action || '';
+    const target = log.target || log.details || '';
+    
     const matchesSearch = 
-      log.sourcePackage.toLowerCase().includes(search.toLowerCase()) ||
-      log.action.toLowerCase().includes(search.toLowerCase()) ||
-      log.details.toLowerCase().includes(search.toLowerCase());
+      caller.toLowerCase().includes(search.toLowerCase()) ||
+      action.toLowerCase().includes(search.toLowerCase()) ||
+      target.toLowerCase().includes(search.toLowerCase());
       
     const matchesStatus = 
       statusFilter === 'ALL' || 
       log.status === statusFilter ||
-      (statusFilter === 'WARNINGS' && log.severity === 'warning') ||
-      (statusFilter === 'CRITICAL' && log.severity === 'critical');
+      (statusFilter === 'WARNINGS' && log.status === 'WARNING') ||
+      (statusFilter === 'CRITICAL' && log.status === 'BLOCKED');
 
     return matchesSearch && matchesStatus;
   });
 
-  const getSeverityColor = (sev) => {
-    switch (sev) {
-      case 'critical': return 'text-cyber-danger bg-cyber-danger/10 border-cyber-danger/30';
-      case 'warning': return 'text-cyber-warning bg-cyber-warning/10 border-cyber-warning/30';
-      case 'info':
-      default: return 'text-cyber-primary bg-cyber-primary/10 border-cyber-primary/30';
+  const getStatusBadgeStyle = (status) => {
+    switch (status) {
+      case 'BLOCKED':
+        return 'text-rose-500 font-bold bg-rose-500/10 border-rose-500/20';
+      case 'WARNING':
+        return 'text-amber-500 font-medium bg-amber-500/10 border-amber-500/20';
+      case 'ALLOWED':
+      default:
+        return 'text-emerald-500 bg-emerald-500/10 border-emerald-500/20';
     }
   };
 
-  const getStatusColor = (status) => {
-    return status === 'BLOCKED' 
-      ? 'text-cyber-danger border-cyber-danger/35 bg-cyber-danger/10 glow-text-danger' 
-      : 'text-cyber-success border-cyber-success/35 bg-cyber-success/10 glow-text-success';
-  };
-
   return (
-    <div className="flex gap-6 h-full items-stretch">
+    <div className="flex gap-6 h-full items-stretch w-full">
       {/* Main Table Segment */}
       <div className="flex-1 glass-panel rounded-xl border border-cyber-border/40 p-5 flex flex-col min-w-0">
         
@@ -74,7 +71,7 @@ export default function LogTable({ logs }) {
               <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
               <input
                 type="text"
-                placeholder="Search packages or actions..."
+                placeholder="Search context or actions..."
                 value={search}
                 onChange={(e) => setSearch(e.target.value)}
                 className="w-full pl-9 pr-4 py-1.5 text-sm font-sans bg-cyber-bg/80 border border-cyber-border/50 rounded-lg text-slate-100 placeholder:text-slate-500 focus:outline-none focus:border-cyber-primary transition-colors"
@@ -83,7 +80,7 @@ export default function LogTable({ logs }) {
 
             {/* Filter buttons */}
             <div className="flex border border-cyber-border/45 rounded-lg p-0.5 bg-cyber-bg/50">
-              {['ALL', 'BLOCKED', 'WARNINGS'].map(filter => (
+              {['ALL', 'BLOCKED', 'WARNING'].map(filter => (
                 <button
                   key={filter}
                   onClick={() => setStatusFilter(filter)}
@@ -101,7 +98,7 @@ export default function LogTable({ logs }) {
         </div>
 
         {/* Dynamic Event Table container */}
-        <div className="flex-1 overflow-y-auto rounded-lg border border-cyber-border/30 bg-cyber-bg/30">
+        <div className="flex-1 overflow-y-auto rounded-lg border border-cyber-border/30 bg-cyber-bg/30 max-h-[450px]">
           {filteredLogs.length === 0 ? (
             <div className="flex flex-col items-center justify-center h-64 text-cyber-muted p-6">
               <FilterX className="w-12 h-12 text-cyber-muted/40 mb-3 animate-pulse" />
@@ -113,68 +110,70 @@ export default function LogTable({ logs }) {
               <thead>
                 <tr className="border-b border-cyber-border/40 bg-cyber-panel/60 sticky top-0 z-10">
                   <th className="p-4 text-[10px] font-mono font-bold text-cyber-muted tracking-wider uppercase">Timestamp</th>
-                  <th className="p-4 text-[10px] font-mono font-bold text-cyber-muted tracking-wider uppercase">Caller Context</th>
-                  <th className="p-4 text-[10px] font-mono font-bold text-cyber-muted tracking-wider uppercase">Action / Event</th>
-                  <th className="p-4 text-[10px] font-mono font-bold text-cyber-muted tracking-wider uppercase">Telemetry Severity</th>
+                  <th className="p-4 text-[10px] font-mono font-bold text-cyber-muted tracking-wider uppercase">Threat Vector / Type</th>
+                  <th className="p-4 text-[10px] font-mono font-bold text-cyber-muted tracking-wider uppercase">Source Origin</th>
+                  <th className="p-4 text-[10px] font-mono font-bold text-cyber-muted tracking-wider uppercase">Target Destination</th>
                   <th className="p-4 text-[10px] font-mono font-bold text-cyber-muted tracking-wider uppercase">Status</th>
+                  <th className="p-4 text-[10px] font-mono font-bold text-cyber-muted tracking-wider uppercase">Latency</th>
                   <th className="p-4 text-[10px] font-mono font-bold text-cyber-muted tracking-wider uppercase"></th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-cyber-border/20 font-mono text-xs">
-                {filteredLogs.map((log) => (
-                  <tr 
-                    key={log.id} 
-                    onClick={() => setSelectedLog(log)}
-                    className={`hover:bg-cyber-panel/30 cursor-pointer transition-colors ${
-                      log.status === 'BLOCKED' ? 'bg-cyber-danger/[0.02]' : ''
-                    } ${selectedLog?.id === log.id ? 'bg-cyber-primary/[0.04] border-l-2 border-l-cyber-primary' : ''}`}
-                  >
-                    <td className="p-4 text-cyber-muted select-none">
-                      {new Date(log.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })}
-                    </td>
-                    <td className="p-4 font-semibold text-slate-200">
-                      <span className="px-2 py-1 rounded bg-cyber-panel border border-cyber-border/30 max-w-[150px] inline-block truncate" title={log.sourcePackage}>
-                        {log.sourcePackage}
-                      </span>
-                    </td>
-                    <td className="p-4">
-                      <div className="font-semibold text-slate-300">{log.action}</div>
-                      <div className="text-[10px] text-cyber-muted/80 truncate max-w-[280px]" title={log.details}>
-                        {log.details}
-                      </div>
-                    </td>
-                    <td className="p-4">
-                      <span className={`px-2 py-0.5 rounded-full border text-[9px] font-bold tracking-widest uppercase inline-flex items-center gap-1 ${getSeverityColor(log.severity)}`}>
-                        {log.severity === 'critical' ? (
-                          <ShieldAlert className="w-3 h-3" />
-                        ) : log.severity === 'warning' ? (
-                          <AlertTriangle className="w-3 h-3" />
-                        ) : (
-                          <Info className="w-3 h-3" />
-                        )}
-                        {log.severity}
-                      </span>
-                    </td>
-                    <td className="p-4">
-                      <span className={`px-2 py-0.5 rounded border text-[9px] font-bold tracking-widest uppercase inline-flex items-center gap-1 ${getStatusColor(log.status)}`}>
-                        {log.status === 'BLOCKED' ? (
-                          <>
-                            <span className="w-1.5 h-1.5 rounded-full bg-cyber-danger animate-pulse"></span>
-                            BLOCKED
-                          </>
-                        ) : (
-                          <>
-                            <span className="w-1.5 h-1.5 rounded-full bg-cyber-success"></span>
-                            PASSED
-                          </>
-                        )}
-                      </span>
-                    </td>
-                    <td className="p-4 text-right">
-                      <ChevronRight className="w-4 h-4 text-cyber-muted/50 inline-block" />
-                    </td>
-                  </tr>
-                ))}
+                {filteredLogs.map((log, idx) => {
+                  const isBlocked = log.status === 'BLOCKED';
+                  const callerContextValue = log.callerContext || log.sourcePackage || 'unknown';
+                  const targetValue = log.target || log.details || 'unknown';
+                  const latencyValue = log.latencyMs != null ? `${log.latencyMs}ms` : '0ms';
+
+                  return (
+                    <tr 
+                      key={log.id || idx} 
+                      onClick={() => setSelectedLog(log)}
+                      className={`hover:bg-cyber-panel/30 cursor-pointer transition-colors ${
+                        isBlocked ? 'bg-cyber-danger/[0.02]' : ''
+                      } ${selectedLog?.id === log.id ? 'bg-cyber-primary/[0.04] border-l-2 border-l-cyber-primary' : ''}`}
+                    >
+                      {/* Timestamp Column */}
+                      <td className="p-4 text-cyber-muted select-none">
+                        {log.timestamp ? log.timestamp.replace(/ (AM|PM)/i, '') : new Date().toLocaleTimeString()}
+                      </td>
+
+                      {/* Threat Vector / Type Column */}
+                      <td className="p-4 text-slate-200 font-semibold">
+                        {log.action}
+                      </td>
+
+                      {/* Source Origin Column - Monospaced highlight container */}
+                      <td className="p-4">
+                        <span className="font-mono text-emerald-400 bg-slate-950 px-2 py-0.5 rounded border border-slate-800 inline-block max-w-[180px] truncate" title={callerContextValue}>
+                          {callerContextValue}
+                        </span>
+                      </td>
+
+                      {/* Target Destination Column */}
+                      <td className="p-4 text-slate-300 max-w-[200px] truncate" title={targetValue}>
+                        {targetValue}
+                      </td>
+
+                      {/* Status Column - Conditional semantic styling */}
+                      <td className="p-4">
+                        <span className={`px-2.5 py-1 rounded border text-[10px] uppercase font-bold tracking-wider ${getStatusBadgeStyle(log.status)}`}>
+                          {log.status}
+                        </span>
+                      </td>
+
+                      {/* Latency Column */}
+                      <td className="p-4 text-slate-300 font-mono">
+                        {latencyValue}
+                      </td>
+
+                      {/* Details indicator */}
+                      <td className="p-4 text-right">
+                        <ChevronRight className="w-4 h-4 text-cyber-muted/50 inline-block" />
+                      </td>
+                    </tr>
+                  );
+                })}
               </tbody>
             </table>
           )}
@@ -193,7 +192,7 @@ export default function LogTable({ logs }) {
                 </h3>
               </div>
               <span className="text-[9px] font-mono text-cyber-muted uppercase block mt-0.5">
-                ID: {selectedLog.id}
+                ID: {selectedLog.id || 'N/A'}
               </span>
             </div>
             <button 
@@ -205,25 +204,26 @@ export default function LogTable({ logs }) {
           </div>
 
           <div className="flex-1 overflow-y-auto space-y-4 font-mono text-xs">
-            {/* Basic parameters */}
+            {/* Context details */}
             <div>
-              <div className="text-[10px] text-cyber-muted uppercase tracking-widest mb-1">Origin Package</div>
+              <div className="text-[10px] text-cyber-muted uppercase tracking-widest mb-1">Origin Context</div>
               <div className="p-2.5 bg-cyber-bg border border-cyber-border/30 rounded text-slate-200 font-bold select-all break-all">
-                {selectedLog.sourcePackage}
+                {selectedLog.callerContext || selectedLog.sourcePackage || 'unknown'}
               </div>
             </div>
 
             <div>
-              <div className="text-[10px] text-cyber-muted uppercase tracking-widest mb-1">Target URL / Detail</div>
+              <div className="text-[10px] text-cyber-muted uppercase tracking-widest mb-1">Target Host / Resource</div>
               <div className="p-2.5 bg-cyber-bg border border-cyber-border/30 rounded text-slate-200 select-all break-all leading-relaxed">
-                {selectedLog.details}
+                {selectedLog.target || selectedLog.details || 'unknown'}
               </div>
             </div>
 
+            {/* Execution Latency Info */}
             <div>
-              <div className="text-[10px] text-cyber-muted uppercase tracking-widest mb-1">Trigger Domain Path</div>
-              <div className="p-2.5 bg-cyber-bg border border-cyber-border/30 rounded text-slate-300 select-all break-all">
-                {selectedLog.callerUrl}
+              <div className="text-[10px] text-cyber-muted uppercase tracking-widest mb-1">Intercept Execution Overhead</div>
+              <div className="p-2.5 bg-cyber-bg border border-cyber-border/30 rounded text-cyan-300 font-bold">
+                {selectedLog.latencyMs != null ? `${selectedLog.latencyMs}ms` : '0ms'}
               </div>
             </div>
 
@@ -231,7 +231,7 @@ export default function LogTable({ logs }) {
             <div>
               <div className="text-[10px] text-cyber-muted uppercase tracking-widest mb-1">Execution Call-Stack</div>
               <pre className="cli-terminal p-3 rounded text-[10px] leading-relaxed overflow-x-auto max-h-56 text-cyan-300/90 whitespace-pre">
-                {selectedLog.stack || 'No Stack telemetry supplied by caller.'}
+                {selectedLog.stack || 'No Stack trace available.'}
               </pre>
             </div>
 

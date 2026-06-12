@@ -123,7 +123,7 @@ You can launch both the **Backend Telemetry Hub** and the **Frontend SOC Dashboa
     ```
     This script runs the `concurrently` utility which fires up:
     *   **Backend Hub**: `http://localhost:5001` (Accepting JSON telemetry payload streams and WebSocket links).
-    *   **Frontend Dashboard**: `http://localhost:5173` (Open this in your browser).
+    *   **Frontend Dashboard**: `http://localhost:3000` (Open this in your browser).
 
 ### Separate Commands (Alternative)
 If you prefer running services in separate terminal windows:
@@ -141,7 +141,7 @@ If you prefer running services in separate terminal windows:
 
 ## 🧪 Interactive Sandbox Playground
 
-To verify that client-side interceptors work correctly, open the dashboard in your browser (`http://localhost:5173`) and navigate to the **Sandbox** page. Here you can execute simulated attacks:
+To verify that client-side interceptors work correctly, open the dashboard in your browser (`http://localhost:3000`) and navigate to the **Sandbox** page. Here you can execute simulated attacks:
 
 1.  **Fetch Internal APIs**: Simulates a standard application network request (`fetch('/api/health')`). It goes through cleanly since the destination is a safe origin.
 2.  **Exfiltrate Credentials to Untrusted Domain**: Attempts to transmit cookie data to `http://eval-server.cc`. The `interceptor.js` proxy immediately catches it, marks the request as **BLOCKED**, drops the fetch stream, and broadcasts a critical alert to the backend telemetry pool.

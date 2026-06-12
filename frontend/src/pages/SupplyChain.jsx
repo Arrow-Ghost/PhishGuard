@@ -1,9 +1,6 @@
 import React, { useState } from 'react';
 import { 
   PackageSearch, 
-  Terminal as TermIcon, 
-  ShieldCheck, 
-  ShieldAlert, 
   CheckCircle,
   FileCode,
   Flame,
@@ -14,7 +11,6 @@ import {
 } from 'lucide-react';
 
 export default function SupplyChain() {
-  // A realistic, seeded package.json structure demonstrating our scanner features
   const SAMPLE_PACKAGE_JSON = `{
   "name": "my-secure-react-app",
   "version": "1.0.0",
@@ -38,28 +34,28 @@ export default function SupplyChain() {
     setScanError('');
     setScanResult(null);
 
-    // Simulate cyber telemetry scanning delay for premium presenter experience
-    setTimeout(() => {
-      fetch('/api/scan', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ packageJson: packageInput })
+    // Call backend API scanner endpoint directly on port 5001
+    fetch('http://localhost:5001/api/scan', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ packageJson: packageInput })
+    })
+      .then(res => {
+        if (!res.ok) {
+          return res.json().then(data => { 
+            throw new Error(data.error || 'Malformatted JSON package config.'); 
+          });
+        }
+        return res.json();
       })
-        .then(res => {
-          if (!res.ok) {
-            return res.json().then(data => { throw new Error(data.error || 'Malformatted JSON package config.'); });
-          }
-          return res.json();
-        })
-        .then(data => {
-          setScanResult(data);
-          setScanning(false);
-        })
-        .catch(err => {
-          setScanError(err.message);
-          setScanning(false);
-        });
-    }, 1200);
+      .then(data => {
+        setScanResult(data);
+        setScanning(false);
+      })
+      .catch(err => {
+        setScanError(err.message);
+        setScanning(false);
+      });
   };
 
   const resetScanner = () => {
@@ -70,10 +66,13 @@ export default function SupplyChain() {
 
   const getRiskBadge = (category) => {
     switch (category) {
-      case 'critical': return 'text-cyber-danger bg-cyber-danger/10 border-cyber-danger/30';
-      case 'warning': return 'text-cyber-warning bg-cyber-warning/10 border-cyber-warning/30';
+      case 'critical': 
+        return 'text-cyber-danger bg-cyber-danger/10 border-cyber-danger/30';
+      case 'warning': 
+        return 'text-cyber-warning bg-cyber-warning/10 border-cyber-warning/30';
       case 'safe':
-      default: return 'text-cyber-success bg-cyber-success/10 border-cyber-success/30';
+      default: 
+        return 'text-cyber-success bg-cyber-success/10 border-cyber-success/30';
     }
   };
 
@@ -143,7 +142,7 @@ export default function SupplyChain() {
           /* Error Box */
           <div className="flex-1 flex flex-col items-center justify-center text-cyber-danger p-6 text-center">
             <AlertTriangle className="w-12 h-12 mb-3 animate-bounce" />
-            <span className="font-mono text-sm uppercase font-bold tracking-wider block">Scan Process Interrupted</span>
+            <span className="font-mono text-sm uppercase font-bold tracking-wider block">Scan Process Failed</span>
             <span className="text-[10px] font-mono text-cyber-danger block mt-2 max-w-sm">
               {scanError}
             </span>
@@ -197,7 +196,7 @@ export default function SupplyChain() {
                     </div>
                     
                     <span className={`px-2 py-0.5 rounded border text-[9px] font-bold uppercase tracking-wider ${getRiskBadge(dep.category)}`}>
-                      {dep.category === 'safe' ? 'Secure' : dep.category.toUpperCase()} // Risk: {dep.riskScore}
+                      {dep.category === 'safe' ? 'Secure' : dep.category.toUpperCase()}
                     </span>
                   </div>
 

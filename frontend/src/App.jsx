@@ -5,7 +5,6 @@ import ThreatMap from './components/ThreatMap';
 import SupplyChain from './pages/SupplyChain';
 import Sandbox from './pages/Sandbox';
 import LogTable from './components/LogTable';
-import { Shield, ShieldAlert, Cpu } from 'lucide-react';
 
 export default function App() {
   const [activeView, setActiveView] = useState('dashboard');
@@ -31,12 +30,21 @@ export default function App() {
           
           if (payload.type === 'SEEDED_LOGS') {
             setLogs(payload.data);
-          } else if (payload.type === 'NEW_LOG') {
-            setLogs(prev => [payload.data, ...prev]);
+          } else {
+            // Support direct raw telemetry frames
+            const newLog = payload.type === 'NEW_LOG' ? payload.data : payload;
+            setLogs(prev => {
+              const isDuplicate = prev.some(log => 
+                log.timestamp === newLog.timestamp && 
+                log.action === newLog.action && 
+                log.target === newLog.target
+              );
+              if (isDuplicate) return prev;
+              return [newLog, ...prev];
+            });
             
-            // Trigger browser system audio beep or glowing overlay in premium consoles on critical exfiltrations
-            if (payload.data.status === 'BLOCKED') {
-              console.warn(`[SHIELD ALERT] Blocked malicious activity from ${payload.data.sourcePackage}: ${payload.data.details}`);
+            if (newLog.status === 'BLOCKED') {
+              console.warn(`[SHIELD ALERT] Blocked malicious activity:`, newLog);
             }
           }
         } catch (err) {
@@ -53,7 +61,6 @@ export default function App() {
       };
 
       ws.onerror = (err) => {
-        // Suppress websocket reports, standard handler handles retry via onclose
         ws.close();
       };
     }
@@ -61,28 +68,13 @@ export default function App() {
     connect();
 
     return () => {
-      if (ws) ws.close();
+      if (ws) {
+        ws.onclose = null; // Unbind the callback before closing to prevent reconnection timer
+        ws.close();
+      }
       if (reconnectTimer) clearTimeout(reconnectTimer);
     };
   }, []);
-
-  // View Router Layout
-  const renderActiveView = () => {
-    switch (activeView) {
-      case 'dashboard':
-        return <Dashboard logs={logs} />;
-      case 'threatmap':
-        return <ThreatMap />;
-      case 'supplychain':
-        return <SupplyChain />;
-      case 'sandbox':
-        return <Sandbox />;
-      case 'logs':
-        return <LogTable logs={logs} />;
-      default:
-        return <Dashboard logs={logs} />;
-    }
-  };
 
   return (
     <div className="flex h-screen w-screen bg-cyber-bg text-slate-100 overflow-hidden font-sans">
@@ -124,9 +116,23 @@ export default function App() {
           </div>
         </header>
 
-        {/* Dynamic page container */}
+        {/* Dynamic page container (persist state using CSS display to allow background websocket streaming) */}
         <div className="flex-1 p-8 overflow-hidden relative z-10">
-          {renderActiveView()}
+          <div className={activeView === 'dashboard' ? 'h-full w-full' : 'hidden'}>
+            <Dashboard />
+          </div>
+          <div className={activeView === 'logs' ? 'h-full w-full' : 'hidden'}>
+            <LogTable logs={logs} />
+          </div>
+          <div className={activeView === 'threatmap' ? 'h-full w-full' : 'hidden'}>
+            <ThreatMap logs={logs} />
+          </div>
+          <div className={activeView === 'supplychain' ? 'h-full w-full' : 'hidden'}>
+            <SupplyChain />
+          </div>
+          <div className={activeView === 'sandbox' ? 'h-full w-full' : 'hidden'}>
+            <Sandbox />
+          </div>
         </div>
 
       </main>

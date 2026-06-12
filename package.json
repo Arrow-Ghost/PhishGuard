@@ -20,7 +20,6 @@
     "websockets"
   ],
   "author": "PhishGuard Dev Team",
-  "license": "MIT",
   "devDependencies": {
     "concurrently": "^8.2.2"
   }

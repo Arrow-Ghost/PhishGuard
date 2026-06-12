@@ -1,15 +1,15 @@
-import React from 'react';
+import React, { useState, useEffect } from 'react';
 import { 
   ShieldCheck, 
   Flame, 
   Layers, 
-  HelpCircle,
   Activity, 
   Lock, 
   ShieldAlert,
   Server
 } from 'lucide-react';
 import MetricCard from '../components/MetricCard';
+import LogTable from '../components/LogTable';
 import { 
   AreaChart, 
   Area, 
@@ -23,28 +23,104 @@ import {
   Legend
 } from 'recharts';
 
-export default function Dashboard({ logs }) {
-  // Compute metrics dynamically from the live logs
-  const totalMonitored = 167; // Simulated system packages
-  const blockedCount = logs.filter(l => l.status === 'BLOCKED').length;
-  const warningsCount = logs.filter(l => l.severity === 'warning').length;
+export default function Dashboard() {
+  // Dynamic React state tracking variables
+  const [logs, setLogs] = useState([]);
+  const [blockedCount, setBlockedCount] = useState(0);
+  const [warningCount, setWarningCount] = useState(0);
+  const [allowedCount, setAllowedCount] = useState(0);
+
+  // Active Real-Time Stream Synchronization
+  useEffect(() => {
+    const socket = new WebSocket('ws://localhost:5001');
+
+    socket.onopen = () => {
+      console.log('[Dashboard WS] Interconnect channel established.');
+    };
+
+    socket.onmessage = (event) => {
+      try {
+        const newLog = JSON.parse(event.data);
+        
+        // Prepend new event packet to logs
+        setLogs((prev) => [newLog, ...prev]);
+        
+        // Ensure strict case matching with agent's string data payloads
+        if (newLog.status === 'BLOCKED') {
+          setBlockedCount((prev) => prev + 1);
+        } else if (newLog.status === 'WARNING') {
+          setWarningCount((prev) => prev + 1); // Feeds Intrusion/Warning UI indicators
+        } else if (newLog.status === 'ALLOWED') {
+          setAllowedCount((prev) => prev + 1);
+        }
+      } catch (err) {
+        console.error('[Dashboard WS] Error parsing telemetry package:', err);
+      }
+    };
+
+    socket.onclose = () => {
+      console.warn('[Dashboard WS] Disconnected.');
+    };
+
+    socket.onerror = (err) => {
+      console.error('[Dashboard WS] Error detected:', err);
+    };
+
+    // System Lifecycle Cleanup - prevents open ghost connection loops on port 5001
+    return () => {
+      if (socket.readyState === WebSocket.OPEN || socket.readyState === WebSocket.CONNECTING) {
+        socket.close();
+      }
+    };
+  }, []);
+
+  // Compute metrics dynamically from baseline + live counters
+  const totalMonitored = 167 + allowedCount;
   const sysStatus = 'ACTIVE';
 
-  // Sparkline arrays to feed MetricCards
-  const depSparkline = [154, 158, 160, 160, 162, 165, 167, 167];
-  const blockedSparkline = [2, 4, 3, 5, 8, 8, 10, blockedCount];
-  const warningSparkline = [1, 2, 2, 4, 3, 3, 4, warningsCount];
-  const statusSparkline = [100, 100, 100, 100, 100, 100, 100, 100];
+  // Dynamic sparklines matching logs trends
+  const depSparkline = Array.from({ length: 8 }, (_, i) => 160 + i + allowedCount);
+  const blockedSparkline = Array.from({ length: 8 }, (_, i) => {
+    const count = logs.slice(0, Math.ceil((i + 1) * (logs.length / 8))).filter(l => l.status === 'BLOCKED').length;
+    return count;
+  });
+  const warningSparkline = Array.from({ length: 8 }, (_, i) => {
+    const count = logs.slice(0, Math.ceil((i + 1) * (logs.length / 8))).filter(l => l.status === 'WARNING').length;
+    return count;
+  });
+  const statusSparkline = Array.from({ length: 8 }, () => 100);
 
-  // Recharts timeline mock logs dataset
-  const chartData = [
-    { hour: '16:00', allowed: 48, blocked: 0, alerts: 1 },
-    { hour: '17:00', allowed: 64, blocked: 1, alerts: 2 },
-    { hour: '18:00', allowed: 52, blocked: 0, alerts: 0 },
-    { hour: '19:00', allowed: 90, blocked: 2, alerts: 3 },
-    { hour: '20:00', allowed: 74, blocked: 1, alerts: 1 },
-    { hour: '21:00', allowed: 110, blocked: blockedCount, alerts: warningsCount },
-  ];
+  // Group and format chart data dynamically from live logs
+  const getChartData = () => {
+    const timeGroups = {};
+    
+    // Read oldest logs first for chronological ordering
+    [...logs].reverse().forEach((log) => {
+      let timeLabel = log.timestamp || new Date().toLocaleTimeString();
+      // Simplify the display timestamp format to HH:MM:SS
+      timeLabel = timeLabel.replace(/ (AM|PM)/i, '');
+
+      if (!timeGroups[timeLabel]) {
+        timeGroups[timeLabel] = { hour: timeLabel, allowed: 0, blocked: 0, alerts: 0 };
+      }
+
+      if (log.status === 'BLOCKED') {
+        timeGroups[timeLabel].blocked += 1;
+      } else if (log.status === 'WARNING') {
+        timeGroups[timeLabel].alerts += 1;
+      } else {
+        timeGroups[timeLabel].allowed += 1;
+      }
+    });
+
+    const dataList = Object.values(timeGroups);
+    return dataList.slice(-6); // Display up to 6 historical data intervals
+  };
+
+  const chartData = getChartData();
+  if (chartData.length === 0) {
+    chartData.push({ hour: '--:--', allowed: 0, blocked: 0, alerts: 0 });
+  }
 
   return (
     <div className="space-y-6 overflow-y-auto max-h-[calc(100vh-4rem)] pr-2 select-none">
@@ -71,16 +147,16 @@ export default function Dashboard({ logs }) {
         <MetricCard
           title="Monitored Packages"
           value={totalMonitored}
-          subtext="6 Vetted CDN roots"
+          subtext="Vetted CDN roots"
           icon={Layers}
           color="primary"
-          trend={{ type: 'up', value: '+4.5%' }}
+          trend={{ type: 'up', value: `+${allowedCount}` }}
           sparklineData={depSparkline}
         />
         <MetricCard
-          title="Stopped Exfiltrations"
+          title="Interceptions"
           value={blockedCount}
-          subtext="Credentials harvesting blocked"
+          subtext="Malicious exfiltrations blocked"
           icon={Flame}
           color="danger"
           trend={{ type: 'up', value: `+${blockedCount}` }}
@@ -88,11 +164,11 @@ export default function Dashboard({ logs }) {
         />
         <MetricCard
           title="Intrusion Alerts"
-          value={warningsCount}
-          subtext="Dynamic DOM code threats"
+          value={warningCount}
+          subtext="Suspicious activity warnings"
           icon={ShieldAlert}
           color="warning"
-          trend={{ type: 'up', value: `+${warningsCount}` }}
+          trend={{ type: 'up', value: `+${warningCount}` }}
           sparklineData={warningSparkline}
         />
         <MetricCard
@@ -106,10 +182,10 @@ export default function Dashboard({ logs }) {
       </div>
 
       {/* Charts Grid */}
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
         
         {/* Real-time Timeline Area Chart */}
-        <div className="lg:col-span-2 glass-panel rounded-xl border border-cyber-border/40 p-5 flex flex-col h-[320px]">
+        <div className="glass-panel rounded-xl border border-cyber-border/40 p-5 flex flex-col h-[320px]">
           <div className="flex items-center gap-2.5 mb-4 shrink-0">
             <Activity className="w-5 h-5 text-cyber-primary" />
             <div>
@@ -193,48 +269,13 @@ export default function Dashboard({ logs }) {
         </div>
       </div>
 
-      {/* Operations Quick Feed logs */}
+      {/* Operations Logs Feed */}
       <div className="glass-panel rounded-xl border border-cyber-border/40 p-5 flex flex-col">
         <h3 className="font-display font-bold text-sm tracking-wider text-slate-100 uppercase mb-4 border-b border-cyber-border/30 pb-2">
           Latest Intercept Alerts
         </h3>
-        
-        <div className="space-y-2.5 max-h-56 overflow-y-auto">
-          {logs.slice(0, 4).map((log) => {
-            const isBlocked = log.status === 'BLOCKED';
-            const isWarning = log.severity === 'warning';
-            return (
-              <div 
-                key={log.id} 
-                className={`p-3 rounded-lg border font-mono text-xs flex justify-between items-center transition-all hover:bg-cyber-panel/40 ${
-                  isBlocked 
-                    ? 'bg-cyber-danger/[0.04] border-cyber-danger/30' 
-                    : isWarning 
-                    ? 'bg-cyber-warning/[0.04] border-cyber-warning/30' 
-                    : 'bg-cyber-bg/60 border-cyber-border/20'
-                }`}
-              >
-                <div className="flex gap-3 items-center min-w-0">
-                  <span className={`text-[10px] px-2 py-0.5 rounded border uppercase font-bold tracking-widest font-display select-none ${
-                    isBlocked 
-                      ? 'border-cyber-danger text-cyber-danger' 
-                      : isWarning 
-                      ? 'border-cyber-warning text-cyber-warning' 
-                      : 'border-cyber-primary text-cyber-primary'
-                  }`}>
-                    {log.status}
-                  </span>
-                  <div className="truncate min-w-0">
-                    <span className="text-slate-100 font-bold mr-2">[{log.sourcePackage}]</span>
-                    <span className="text-slate-300">{log.details}</span>
-                  </div>
-                </div>
-                <span className="text-[10px] text-cyber-muted shrink-0 select-none ml-4">
-                  {new Date(log.timestamp).toLocaleTimeString()}
-                </span>
-              </div>
-            );
-          })}
+        <div className="w-full">
+          <LogTable logs={logs} />
         </div>
       </div>
     </div>
